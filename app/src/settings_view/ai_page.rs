@@ -28,15 +28,16 @@ use crate::settings::{
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsWithByok, CodeSettings, CodebaseContextEnabled,
     FileBasedMcpEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled, RuleSuggestionsEnabled,
-    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    IntelligentAutosuggestionsEnabled, LocalLLMProvider, MemoryEnabled, NLDInTerminalEnabled,
+    NaturalLanguageAutosuggestionsEnabled, OllamaBaseUrl, OllamaModel, OrchestrationEnabled,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
+use crate::themes::theme::Fill;
 use crate::view_components::{
     action_button::{ActionButton, ButtonSize, SecondaryTheme},
     FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
@@ -53,7 +54,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Expanded, Fill,
+    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Expanded,
     HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
@@ -439,6 +440,9 @@ pub struct AISettingsPageView {
 
     base_model_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     coding_model_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    local_llm_provider_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    ollama_model_editor: ViewHandle<EditorView>,
+    ollama_base_url_editor: ViewHandle<EditorView>,
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
@@ -542,6 +546,66 @@ impl AISettingsPageView {
             dropdown
         });
         Self::refresh_base_model_menu(&base_model_dropdown, ctx);
+
+        let local_llm_provider_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_items(
+                LocalLLMProvider::iter()
+                    .map(|provider| {
+                        DropdownItem::new(
+                            provider.display_name(),
+                            AISettingsPageAction::SetLocalLLMProvider(provider),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+
+            dropdown
+        });
+        Self::refresh_local_llm_provider_menu(&local_llm_provider_dropdown, ctx);
+
+        let ollama_model_editor = Self::create_settings_text_editor(
+            "e.g. llama3.1",
+            AISettings::as_ref(ctx).ollama_model.value().clone(),
+            ctx,
+        );
+        let ollama_base_url_editor = Self::create_settings_text_editor(
+            "http://127.0.0.1:11434",
+            AISettings::as_ref(ctx).ollama_base_url.value().clone(),
+            ctx,
+        );
+        let ollama_inputs_enabled = Self::is_ollama_input_enabled(ctx);
+        Self::update_editor_interaction_state(
+            ollama_model_editor.clone(),
+            ollama_inputs_enabled,
+            ctx,
+        );
+        Self::update_editor_interaction_state(
+            ollama_base_url_editor.clone(),
+            ollama_inputs_enabled,
+            ctx,
+        );
+
+        ctx.subscribe_to_view(&ollama_model_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let value = editor.as_ref(ctx).buffer_text(ctx).trim().to_string();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.ollama_model.set_value(value, ctx));
+                });
+            }
+        });
+
+        ctx.subscribe_to_view(&ollama_base_url_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let value = editor.as_ref(ctx).buffer_text(ctx).trim().to_string();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.ollama_base_url.set_value(value, ctx));
+                });
+            }
+        });
 
         let thinking_display_mode_dropdown =
             OtherAIWidget::create_thinking_display_mode_dropdown(ctx);
@@ -879,6 +943,8 @@ impl AISettingsPageView {
                     );
                     Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
                     Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+                    Self::refresh_local_llm_provider_menu(&me.local_llm_provider_dropdown, ctx);
+                    me.update_ollama_settings_enablement(ctx);
                     Self::refresh_mcp_allowlist_dropdown(&me.mcp_allowlist_dropdown, ctx);
                     Self::refresh_mcp_denylist_dropdown(&me.mcp_denylist_dropdown, ctx);
                 }
@@ -951,6 +1017,22 @@ impl AISettingsPageView {
                                 ctx,
                             );
                         });
+                }
+                AISettingsChangedEvent::LocalLLMProvider { .. } => {
+                    Self::refresh_local_llm_provider_menu(&me.local_llm_provider_dropdown, ctx);
+                    me.update_ollama_settings_enablement(ctx);
+                }
+                AISettingsChangedEvent::OllamaModel { .. } => {
+                    let value = AISettings::as_ref(ctx).ollama_model.value().clone();
+                    me.ollama_model_editor.update(ctx, |editor, ctx| {
+                        editor.set_buffer_text(&value, ctx);
+                    });
+                }
+                AISettingsChangedEvent::OllamaBaseUrl { .. } => {
+                    let value = AISettings::as_ref(ctx).ollama_base_url.value().clone();
+                    me.ollama_base_url_editor.update(ctx, |editor, ctx| {
+                        editor.set_buffer_text(&value, ctx);
+                    });
                 }
                 _ => (),
             }
@@ -1368,6 +1450,9 @@ impl AISettingsPageView {
             cli_agent_toolbar_inline_editor,
             base_model_dropdown,
             coding_model_dropdown,
+            local_llm_provider_dropdown,
+            ollama_model_editor,
+            ollama_base_url_editor,
             autonomy_dropdown_menu,
             code_read_allowlist_editor,
             code_read_autonomy_dropdown_menu,
@@ -1406,6 +1491,44 @@ impl AISettingsPageView {
                 }
             });
         ctx.notify();
+    }
+
+    fn create_settings_text_editor(
+        placeholder: &'static str,
+        initial_value: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<EditorView> {
+        ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.monospace_font_family()),
+                    text_colors_override: Some(TextColors {
+                        default_color: appearance.theme().active_ui_text_color(),
+                        disabled_color: appearance.theme().disabled_ui_text_color(),
+                        hint_color: appearance.theme().disabled_ui_text_color(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text(placeholder, ctx);
+            editor.set_buffer_text(&initial_value, ctx);
+            editor
+        })
+    }
+
+    fn is_ollama_input_enabled(ctx: &mut ViewContext<Self>) -> bool {
+        let settings = AISettings::as_ref(ctx);
+        settings.is_any_ai_enabled(ctx) && *settings.local_llm_provider.value() == LocalLLMProvider::Ollama
+    }
+
+    fn update_ollama_settings_enablement(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_enabled = Self::is_ollama_input_enabled(ctx);
+        Self::update_editor_interaction_state(self.ollama_model_editor.clone(), is_enabled, ctx);
+        Self::update_editor_interaction_state(self.ollama_base_url_editor.clone(), is_enabled, ctx);
     }
 
     /// Set the active subpage and rebuild the widget list to show only relevant widgets.
@@ -1507,6 +1630,7 @@ impl AISettingsPageView {
                 if voice_supported {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
+                widgets.push(Box::new(LocalLLMWidget));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(OtherAIWidget::default()));
@@ -1518,7 +1642,10 @@ impl AISettingsPageView {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
                     widgets.push(Box::new(UsageWidget::default()));
                 }
-                widgets.push(Box::new(AgentsWidget::default()));
+                widgets.push(Box::new(AgentsWidget {
+                    show_models: false,
+                    ..AgentsWidget::default()
+                }));
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
@@ -1645,6 +1772,24 @@ impl AISettingsPageView {
                 AISettingsPageAction::SetCodingModel(active.id.clone()),
                 ctx,
             );
+            ctx.notify();
+        });
+        ctx.notify();
+    }
+
+    pub fn refresh_local_llm_provider_menu(
+        menu: &ViewHandle<Dropdown<AISettingsPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        menu.update(ctx, |menu, ctx| {
+            if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
+                menu.set_enabled(ctx);
+            } else {
+                menu.set_disabled(ctx);
+            }
+
+            let active = *AISettings::as_ref(ctx).local_llm_provider.value();
+            menu.set_selected_by_action(AISettingsPageAction::SetLocalLLMProvider(active), ctx);
             ctx.notify();
         });
         ctx.notify();
@@ -2084,6 +2229,7 @@ pub enum AISettingsPageAction {
     OpenExecutionProfileEditor(ClientProfileId),
     SetBaseModel(LLMId),
     SetCodingModel(LLMId),
+    SetLocalLLMProvider(LocalLLMProvider),
     SetAutonomyReadonlyCommandsSetting,
     SetAutonomySupervisedSetting,
     SetCodingPermission(AgentModeCodingPermissionsType),
@@ -2558,6 +2704,12 @@ impl TypedActionView for AISettingsPageView {
                     prefs.update_preferred_coding_llm(id, None, ctx);
                 });
             }
+            AISettingsPageAction::SetLocalLLMProvider(provider) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.local_llm_provider.set_value(*provider, ctx));
+                });
+                ctx.notify();
+            }
             AISettingsPageAction::SetAutonomyReadonlyCommandsSetting
             | AISettingsPageAction::SetAutonomySupervisedSetting => {
                 let readonly_cmd_execution_enabled = matches!(
@@ -2999,8 +3151,8 @@ fn render_ai_feature_switch(
         .check(is_setting_enabled)
         .with_disabled(!is_setting_toggleable)
         .with_disabled_styles(UiComponentStyles {
-            background: Some(Fill::Solid(internal_colors::neutral_4(appearance.theme()))),
-            foreground: Some(Fill::Solid(internal_colors::neutral_5(appearance.theme()))),
+            background: Some(Fill::Solid(internal_colors::neutral_4(appearance.theme())).into()),
+            foreground: Some(Fill::Solid(internal_colors::neutral_5(appearance.theme())).into()),
             ..Default::default()
         })
         .build()
@@ -3696,7 +3848,7 @@ impl SettingsWidget for ActiveAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "active ai a.i. next command prompt suggestions code diffs suggested banners passive unit tests commit pull request pr git code review autogen generate"
+        "active ai a.i. next command prompt suggestions code diffs suggested banners passive unit tests commit pull request pr git code review autogen generate ollama local llm model provider"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
@@ -3776,11 +3928,22 @@ impl SettingsWidget for ActiveAIWidget {
     }
 }
 
-#[derive(Default)]
 struct AgentsWidget {
     codebase_context_toggle: SwitchStateHandle,
     codebase_context_link_index: HighlightedHyperlink,
     show_in_prompt_checkbox: MouseStateHandle,
+    show_models: bool,
+}
+
+impl Default for AgentsWidget {
+    fn default() -> Self {
+        Self {
+            codebase_context_toggle: Default::default(),
+            codebase_context_link_index: Default::default(),
+            show_in_prompt_checkbox: Default::default(),
+            show_models: true,
+        }
+    }
 }
 
 impl SettingsWidget for AgentsWidget {
@@ -3788,9 +3951,9 @@ impl SettingsWidget for AgentsWidget {
 
     fn search_terms(&self) -> &str {
         if MCPServersWidget::should_show_mcp() {
-            "ai a.i. agent autonomy profiles allowlist denylist autoexecute permissions models llms planning mcp server"
+            "ai a.i. agent autonomy profiles allowlist denylist autoexecute permissions models llms planning ollama local provider mcp server"
         } else {
-            "ai a.i. agent autonomy profiles allowlist denylist autoexecute permissions models llms planning"
+            "ai a.i. agent autonomy profiles allowlist denylist autoexecute permissions models llms planning ollama local provider"
         }
     }
 
@@ -3811,6 +3974,13 @@ impl SettingsWidget for AgentsWidget {
                     .with_margin_bottom(8.)
                     .finish(),
             );
+            if self.show_models {
+                column.add_child(
+                    Container::new(self.render_models_section(view, ai_settings, appearance, app))
+                        .with_margin_bottom(8.)
+                        .finish(),
+                );
+            }
         } else {
             // Legacy layout: show Agents header + Models + Permissions
             let mut agents_header = Flex::column();
@@ -3928,14 +4098,36 @@ impl AgentsWidget {
         .with_margin_bottom(8.0)
         .finish();
 
-        let base_model_setting =
-            Container::new(self.render_base_model_setting(view, ai_settings, appearance, app))
-                .with_margin_bottom(8.0)
-                .finish();
+        let provider_setting = Container::new(
+            self.render_local_llm_provider_setting(view, ai_settings, appearance, app),
+        )
+        .with_margin_bottom(8.0)
+        .finish();
 
-        Flex::column()
-            .with_children([model_subheader, base_model_setting])
-            .finish()
+        let mut children = vec![model_subheader, provider_setting];
+
+        if *ai_settings.local_llm_provider.value() == LocalLLMProvider::Ollama {
+            children.push(
+                Container::new(self.render_ollama_model_setting(view, ai_settings, appearance, app))
+                    .with_margin_bottom(8.0)
+                    .finish(),
+            );
+            children.push(
+                Container::new(
+                    self.render_ollama_base_url_setting(view, ai_settings, appearance, app),
+                )
+                .with_margin_bottom(8.0)
+                .finish(),
+            );
+        } else {
+            children.push(
+                Container::new(self.render_base_model_setting(view, ai_settings, appearance, app))
+                    .with_margin_bottom(8.0)
+                    .finish(),
+            );
+        }
+
+        Flex::column().with_children(children).finish()
     }
 
     fn render_permissions_section(
@@ -4322,6 +4514,111 @@ impl AgentsWidget {
         )
     }
 
+    fn render_local_llm_provider_setting(
+        &self,
+        view: &AISettingsPageView,
+        ai_settings: &AISettings,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "LLM provider",
+            Some("Choose whether LLM-only features use Warp or your local Ollama runtime. Agent orchestration and other server-backed features still use Warp services."),
+            None,
+            LocalOnlyIconState::for_setting(
+                LocalLLMProvider::storage_key(),
+                LocalLLMProvider::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!ai_settings.is_any_ai_enabled(app)).then(|| appearance.theme().disabled_ui_text_color()),
+            &view.local_llm_provider_dropdown,
+        )
+    }
+
+    fn render_ollama_model_setting(
+        &self,
+        view: &AISettingsPageView,
+        ai_settings: &AISettings,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        self.render_text_input_setting(
+            appearance,
+            "Ollama model",
+            Some("The local model name to use, for example `llama3.1`."),
+            LocalOnlyIconState::for_setting(
+                OllamaModel::storage_key(),
+                OllamaModel::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!ai_settings.is_any_ai_enabled(app)).then(|| appearance.theme().disabled_ui_text_color()),
+            view.ollama_model_editor.clone(),
+        )
+    }
+
+    fn render_ollama_base_url_setting(
+        &self,
+        view: &AISettingsPageView,
+        ai_settings: &AISettings,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        self.render_text_input_setting(
+            appearance,
+            "Ollama base URL",
+            Some("Optional. Defaults to `http://127.0.0.1:11434`."),
+            LocalOnlyIconState::for_setting(
+                OllamaBaseUrl::storage_key(),
+                OllamaBaseUrl::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!ai_settings.is_any_ai_enabled(app)).then(|| appearance.theme().disabled_ui_text_color()),
+            view.ollama_base_url_editor.clone(),
+        )
+    }
+
+    fn render_text_input_setting(
+        &self,
+        appearance: &Appearance,
+        label: &str,
+        secondary_text: Option<&str>,
+        local_only_icon_state: LocalOnlyIconState,
+        color_override: Option<Fill>,
+        editor: ViewHandle<EditorView>,
+    ) -> Box<dyn Element> {
+        let input = appearance
+            .ui_builder()
+            .text_input(editor)
+            .with_style(UiComponentStyles {
+                padding: Some(Coords {
+                    top: 10.,
+                    bottom: 10.,
+                    left: 16.,
+                    right: 16.,
+                }),
+                background: Some(appearance.theme().surface_2().into()),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_spacing(8.)
+            .with_child(render_dropdown_item_label(
+                label.to_string(),
+                secondary_text.map(str::to_owned),
+                local_only_icon_state,
+                color_override,
+                appearance,
+            ))
+            .with_child(input)
+            .finish()
+    }
+
     fn render_codebase_context_outline_generation_setting(
         codebase_context_toggle: SwitchStateHandle,
         codebase_context_link_index: HighlightedHyperlink,
@@ -4583,6 +4880,93 @@ impl AgentsWidget {
         Container::new(Flex::column().with_children(vec![selector, items]).finish())
             .with_margin_bottom(8.)
             .finish()
+    }
+}
+
+#[derive(Default)]
+struct LocalLLMWidget;
+
+impl SettingsWidget for LocalLLMWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "llm provider local ollama model base url"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
+        let color_override = (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color());
+
+        let mut column = Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                build_sub_header(
+                    appearance,
+                    "Local LLM",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            )
+            .with_child(Container::new(render_dropdown_item(
+                appearance,
+                "LLM provider",
+                Some("Choose whether LLM-only features use Warp or your local Ollama runtime. Agent orchestration and other server-backed features still use Warp services."),
+                None,
+                LocalOnlyIconState::for_setting(
+                    LocalLLMProvider::storage_key(),
+                    LocalLLMProvider::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                color_override,
+                &view.local_llm_provider_dropdown,
+            )).with_margin_bottom(8.).finish());
+
+        if *ai_settings.local_llm_provider.value() == LocalLLMProvider::Ollama {
+            let input = appearance
+                .ui_builder()
+                .text_input(view.ollama_base_url_editor.clone())
+                .with_style(UiComponentStyles {
+                    padding: Some(Coords {
+                        top: 10.,
+                        bottom: 10.,
+                        left: 16.,
+                        right: 16.,
+                    }),
+                    background: Some(appearance.theme().surface_2().into()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+
+            let base_url_setting = Flex::column()
+                .with_spacing(8.)
+                .with_child(render_dropdown_item_label(
+                    "Ollama base URL".to_string(),
+                    Some("Optional. Defaults to `http://127.0.0.1:11434`.".to_owned()),
+                    LocalOnlyIconState::for_setting(
+                        OllamaBaseUrl::storage_key(),
+                        OllamaBaseUrl::sync_to_cloud(),
+                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                        app,
+                    ),
+                    color_override,
+                    appearance,
+                ))
+                .with_child(input)
+                .finish();
+
+            column.add_child(Container::new(base_url_setting).with_margin_bottom(8.).finish());
+        }
+
+        column.finish()
     }
 }
 

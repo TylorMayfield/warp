@@ -1,6 +1,7 @@
 use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
 use crate::editor::EditorView;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, LocalLLMProvider};
+use settings::Setting;
 use crate::ui_components::icons::Icon;
 use crate::view_components::FilterableDropdown;
 use crate::view_components::{Dropdown, SubmittableTextInput};
@@ -212,30 +213,72 @@ fn render_permission_row<T: Clone + 'static + std::fmt::Debug + Send + Sync>(
 pub fn render_models_section(
     appearance: &Appearance,
     view: &ExecutionProfileEditorView,
+    app: &AppContext,
 ) -> Box<dyn Element> {
+    let is_ollama = *AISettings::as_ref(app).local_llm_provider.value() == LocalLLMProvider::Ollama;
+
     let mut column = Flex::column()
         .with_child(render_separator(appearance))
-        .with_child(render_section_label("MODELS", appearance))
-        .with_child(render_filterable_dropdown_row(
+        .with_child(render_section_label("MODELS", appearance));
+
+    if is_ollama {
+        let label_elem = Text::new("Ollama model".to_string(), appearance.ui_font_family(), 13.)
+            .with_color(appearance.theme().active_ui_text_color().into())
+            .finish();
+        let desc_elem = Text::new(
+            "The local model name to use, for example `llama3.1`.".to_string(),
+            appearance.ui_font_family(),
+            11.,
+        )
+        .with_color(
+            appearance
+                .theme()
+                .sub_text_color(appearance.theme().surface_1())
+                .into(),
+        )
+        .finish();
+        let ollama_row = Container::new(
+            Flex::column()
+                .with_child(
+                    Container::new(
+                        Flex::column()
+                            .with_child(label_elem)
+                            .with_child(desc_elem)
+                            .finish(),
+                    )
+                    .with_margin_bottom(4.)
+                    .finish(),
+                )
+                .with_child(
+                    Container::new(ChildView::new(&view.ollama_model_editor).finish()).finish(),
+                )
+                .finish(),
+        )
+        .with_margin_bottom(12.)
+        .finish();
+        column.add_child(ollama_row);
+    } else {
+        column.add_child(render_filterable_dropdown_row(
             appearance,
             "Base model",
             "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
             &view.base_model_dropdown,
-        ))
-        .with_child(render_filterable_dropdown_row(
+        ));
+        column.add_child(render_filterable_dropdown_row(
             appearance,
             "Full terminal use model",
             "The model used when the agent operates inside interactive terminal applications like database shells, debuggers, REPLs, or dev servers—reading live output and writing commands to the PTY.",
             &view.full_terminal_use_model_dropdown,
         ));
 
-    if FeatureFlag::LocalComputerUse.is_enabled() {
-        column.add_child(render_filterable_dropdown_row(
-            appearance,
-            "Computer use model",
-            "The model used when the agent takes control of your computer to interact with graphical applications through mouse movements, clicks, and keyboard input.",
-            &view.computer_use_model_dropdown,
-        ));
+        if FeatureFlag::LocalComputerUse.is_enabled() {
+            column.add_child(render_filterable_dropdown_row(
+                appearance,
+                "Computer use model",
+                "The model used when the agent takes control of your computer to interact with graphical applications through mouse movements, clicks, and keyboard input.",
+                &view.computer_use_model_dropdown,
+            ));
+        }
     }
 
     Container::new(column.finish())

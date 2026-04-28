@@ -4,6 +4,7 @@ pub mod block;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_secrets;
+mod ollama;
 pub mod object;
 pub(crate) mod presigned_upload;
 pub mod referral;
@@ -64,6 +65,7 @@ use warpui::SingletonEntity;
 use super::experiments::ServerExperiment;
 use super::experiments::ServerExperiments;
 use super::graphql::GraphQLError;
+use self::ollama::OllamaAIClient;
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -1233,6 +1235,7 @@ impl ServerApi {
 /// or any of its implemented trait objects.
 pub struct ServerApiProvider {
     server_api: Arc<ServerApi>,
+    ai_client: Arc<dyn AIClient>,
 }
 
 impl ServerApiProvider {
@@ -1284,8 +1287,20 @@ impl ServerApiProvider {
             },
             |_, _| {},
         );
+        let server_api = Arc::new(server_api);
+        let ai_client: Arc<dyn AIClient> = match OllamaAIClient::new(server_api.clone()) {
+            Ok(client) => Arc::new(client),
+            Err(error) => {
+                log::error!(
+                    "Failed to initialize configurable AI client; falling back to Warp server: {error:#}"
+                );
+                server_api.clone()
+            }
+        };
+
         Self {
-            server_api: Arc::new(server_api),
+            server_api,
+            ai_client,
         }
     }
 
@@ -1305,8 +1320,10 @@ impl ServerApiProvider {
     /// Constructs a new SeverApiProvider for tests.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
+        let server_api = Arc::new(ServerApi::new_for_test());
         Self {
-            server_api: Arc::new(ServerApi::new_for_test()),
+            ai_client: server_api.clone(),
+            server_api,
         }
     }
 
@@ -1337,7 +1354,7 @@ impl ServerApiProvider {
     }
 
     pub fn get_ai_client(&self) -> Arc<dyn AIClient> {
-        self.server_api.clone()
+        self.ai_client.clone()
     }
 
     pub fn get_cloud_objects_client(&self) -> Arc<dyn ObjectClient> {

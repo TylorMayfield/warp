@@ -367,6 +367,48 @@ settings::macros::implement_setting_for_enum!(
     description: "Controls how agent thinking traces are displayed after streaming.",
 );
 
+/// Controls which provider handles Warp's LLM-backed features.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Controls which provider handles Warp's LLM-backed features.",
+    rename_all = "snake_case"
+)]
+pub enum LocalLLMProvider {
+    #[default]
+    Warp,
+    Ollama,
+}
+
+settings::macros::implement_setting_for_enum!(
+    LocalLLMProvider,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    private: false,
+    toml_path: "agents.warp_agent.models.local_llm_provider",
+    description: "Controls which provider handles Warp's LLM-backed features.",
+);
+
+impl LocalLLMProvider {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LocalLLMProvider::Warp => "Warp",
+            LocalLLMProvider::Ollama => "Local Ollama",
+        }
+    }
+}
+
 impl ThinkingDisplayMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
@@ -1383,6 +1425,31 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.mcp_servers.file_based_mcp_enabled",
         description: "Whether third-party file-based MCP servers are automatically detected.",
+    }
+
+    // Controls which provider handles Warp's LLM-backed features.
+    local_llm_provider: LocalLLMProvider,
+
+    // Name of the Ollama model to use for local LLM-backed features.
+    ollama_model: OllamaModel {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.warp_agent.models.ollama.model",
+        description: "Name of the Ollama model to use for local LLM-backed features.",
+    }
+
+    // Base URL of the local Ollama server.
+    ollama_base_url: OllamaBaseUrl {
+        type: String,
+        default: "http://127.0.0.1:11434".to_string(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.warp_agent.models.ollama.base_url",
+        description: "Base URL of the local Ollama server.",
     }
 
     // Controls how agent thinking/reasoning traces are displayed.

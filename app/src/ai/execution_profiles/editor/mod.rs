@@ -9,7 +9,9 @@ use crate::ai::paths::host_native_absolute_path;
 use crate::editor::InteractionState;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::settings::{AISettings, AgentModeCommandExecutionPredicate};
+use crate::report_if_error;
+use crate::settings::{AISettings, AISettingsChangedEvent, AgentModeCommandExecutionPredicate};
+use settings::Setting;
 use crate::ui_components::icons::Icon;
 use crate::view_components::{
     action_button::{ActionButton, DangerSecondaryTheme},
@@ -244,6 +246,7 @@ pub struct ExecutionProfileEditorView {
     mcp_denylist_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     mcp_denylist_mouse_state_handles: Vec<MouseStateHandle>,
     profile_name_editor: ViewHandle<EditorView>,
+    ollama_model_editor: ViewHandle<EditorView>,
     delete_button: ViewHandle<ActionButton>,
     tooltip_mouse_state_handles: TooltipMouseStateHandles,
     plan_auto_sync_switch: SwitchStateHandle,
@@ -560,6 +563,14 @@ impl ExecutionProfileEditorView {
 
         Self::update_profile_name_editor(&profile_name_editor, &profile_data, ctx);
 
+        let ollama_model_initial = AISettings::as_ref(ctx).ollama_model.value().clone();
+        let ollama_model_editor = ctx.add_view(|ctx| {
+            let mut editor = EditorView::single_line(SingleLineEditorOptions::default(), ctx);
+            editor.set_placeholder_text("e.g. llama3.1", ctx);
+            editor.set_buffer_text(&ollama_model_initial, ctx);
+            editor
+        });
+
         let delete_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Delete profile", DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
@@ -595,6 +606,7 @@ impl ExecutionProfileEditorView {
             mcp_denylist_dropdown,
             mcp_denylist_mouse_state_handles,
             profile_name_editor,
+            ollama_model_editor,
             delete_button,
             tooltip_mouse_state_handles: Default::default(),
             plan_auto_sync_switch: Default::default(),
@@ -605,6 +617,30 @@ impl ExecutionProfileEditorView {
         ctx.subscribe_to_view(&view.profile_name_editor, |view, _, event, ctx| {
             if let EditorEvent::Edited(_) = event {
                 view.save_profile_name_if_valid(ctx);
+            }
+        });
+
+        ctx.subscribe_to_view(&view.ollama_model_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let value = editor.as_ref(ctx).buffer_text(ctx).trim().to_string();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.ollama_model.set_value(value, ctx));
+                });
+            }
+        });
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            match event {
+                AISettingsChangedEvent::OllamaModel { .. } => {
+                    let value = AISettings::as_ref(ctx).ollama_model.value().clone();
+                    me.ollama_model_editor.update(ctx, |editor, ctx| {
+                        editor.set_buffer_text(&value, ctx);
+                    });
+                }
+                AISettingsChangedEvent::LocalLLMProvider { .. } => {
+                    ctx.notify();
+                }
+                _ => {}
             }
         });
 
@@ -1274,7 +1310,7 @@ impl View for ExecutionProfileEditorView {
                 &self.profile_name_editor,
                 profile_data.is_default_profile,
             ))
-            .with_child(render_models_section(appearance, self))
+            .with_child(render_models_section(appearance, self, app))
             .with_child(render_permissions_section(
                 appearance,
                 self,

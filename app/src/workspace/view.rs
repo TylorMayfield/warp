@@ -1490,11 +1490,9 @@ impl Workspace {
 
     fn build_ai_assistant_panel_view(
         ctx: &mut ViewContext<Self>,
-        server_api: Arc<ServerApi>,
         ai_client: Arc<dyn AIClient>,
     ) -> ViewHandle<AIAssistantPanelView> {
-        let ai_assistant_panel =
-            ctx.add_typed_action_view(|ctx| AIAssistantPanelView::new(server_api, ai_client, ctx));
+        let ai_assistant_panel = ctx.add_typed_action_view(|ctx| AIAssistantPanelView::new(ai_client, ctx));
 
         ctx.subscribe_to_view(&ai_assistant_panel, |me, _, event, ctx| {
             me.handle_ai_assistant_panel_event(event, ctx);
@@ -2777,8 +2775,7 @@ impl Workspace {
             None
         };
 
-        let ai_assistant_panel =
-            Self::build_ai_assistant_panel_view(ctx, server_api.clone(), ai_client.clone());
+        let ai_assistant_panel = Self::build_ai_assistant_panel_view(ctx, ai_client.clone());
 
         ctx.observe(&tips_completed, Workspace::on_tips_model_changed);
 

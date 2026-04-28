@@ -16,6 +16,7 @@ use crate::{
     network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind},
     report_error,
     server::server_api::ServerApiProvider,
+    settings::{AISettings, AISettingsChangedEvent},
     workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent},
 };
 
@@ -530,6 +531,17 @@ impl LLMPreferences {
 
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
+                me.refresh_authed_models(ctx);
+            }
+        });
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                AISettingsChangedEvent::LocalLLMProvider { .. }
+                    | AISettingsChangedEvent::OllamaModel { .. }
+                    | AISettingsChangedEvent::OllamaBaseUrl { .. }
+            ) {
                 me.refresh_authed_models(ctx);
             }
         });

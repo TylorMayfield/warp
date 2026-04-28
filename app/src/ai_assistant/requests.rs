@@ -14,7 +14,7 @@ use crate::{
     auth::AuthStateProvider,
     send_telemetry_from_ctx,
     server::{
-        server_api::{ai::AIClient, ServerApi},
+        server_api::ai::AIClient,
         telemetry::{TelemetryEvent, WarpAIRequestResult},
     },
     workspaces::user_workspaces::UserWorkspaces,
@@ -74,7 +74,6 @@ pub enum GenerateDialogueResult {
 }
 
 pub struct Requests {
-    server_api: Arc<ServerApi>,
     ai_client: Arc<dyn AIClient>,
     request_status: RequestStatus,
     request_limit_info: RequestLimitInfo,
@@ -115,7 +114,6 @@ impl Requests {
 /// Public interface.
 impl Requests {
     pub fn new(
-        server_api: Arc<ServerApi>,
         ai_client: Arc<dyn AIClient>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -126,7 +124,6 @@ impl Requests {
         let request_limit_info = cached_request_limit_info.unwrap_or_default();
 
         let requests = Self {
-            server_api,
             ai_client,
             current_transcript: Vec::new(),
             current_transcript_summarized: false,
@@ -174,12 +171,12 @@ impl Requests {
 
     /// Starts a Warp AI request against the server with the given request prompt.
     pub fn issue_request(&mut self, request: String, ctx: &mut ModelContext<Self>) {
-        let server_api = self.server_api.clone();
         let raw_request = request.trim();
         let request_for_api = raw_request.to_string();
         let transcript = self.current_transcript.clone();
         let transcript_part_index = transcript.len();
         let ai_execution_context = self.ai_execution_context.clone();
+        let ai_client = self.ai_client.clone();
 
         let request_in_markdown = markdown_segments_from_text(
             transcript_part_index,
@@ -190,7 +187,7 @@ impl Requests {
         let future_handle = ctx.spawn(
             async move {
                 let start_time = Utc::now();
-                (start_time, server_api
+                (start_time, ai_client
                     .generate_dialogue_answer(transcript, request_for_api, ai_execution_context)
                     .await)
             },
@@ -425,7 +422,6 @@ impl Requests {
         use crate::server::server_api::ServerApiProvider;
 
         Self {
-            server_api: ServerApiProvider::new_for_test().get(),
             ai_client: ServerApiProvider::new_for_test().get_ai_client(),
             current_transcript: transcript,
             current_transcript_summarized: false,

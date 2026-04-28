@@ -92,6 +92,26 @@ pub struct AIGeneratedCommandParameter {
     description: String,
 }
 
+impl AIGeneratedCommand {
+    pub(crate) fn new(
+        command: String,
+        description: String,
+        parameters: Vec<AIGeneratedCommandParameter>,
+    ) -> Self {
+        Self {
+            command,
+            description,
+            parameters,
+        }
+    }
+}
+
+impl AIGeneratedCommandParameter {
+    pub(crate) fn new(id: String, description: String) -> Self {
+        Self { id, description }
+    }
+}
+
 impl From<AIGeneratedCommand> for Workflow {
     fn from(ai_command: AIGeneratedCommand) -> Self {
         // Note that we use the AI generated description as the _title_ of the workflow.
