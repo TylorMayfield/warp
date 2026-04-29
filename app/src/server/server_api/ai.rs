@@ -180,6 +180,8 @@ impl TaskStatusUpdate {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
     pub prompt: String,
+    #[serde(skip_serializing)]
+    pub working_directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<AgentConfigSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -58,6 +58,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
         prompt: "test".to_string(),
+        working_directory: None,
         config: None,
         title: None,
         team: None,
@@ -144,6 +145,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
         prompt: "test".to_string(),
+        working_directory: None,
         config: None,
         title: None,
         team: None,

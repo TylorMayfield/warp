@@ -79,6 +79,8 @@ use warp_multi_agent_api::{message, Task, ToolType};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
+use crate::settings::{AISettings, LocalLLMProvider};
+use ::settings::Setting;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 #[derive(Debug, Clone)]
@@ -246,10 +248,23 @@ impl RequestInput {
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
-        let model_id = llm_prefs
-            .get_active_base_model(app, Some(terminal_view_id))
-            .id
-            .clone();
+        let ai_settings = AISettings::as_ref(app);
+        let model_id = if *ai_settings.local_llm_provider.value() == LocalLLMProvider::Ollama {
+            let ollama_model = ai_settings.ollama_model.value().trim();
+            if ollama_model.is_empty() {
+                llm_prefs
+                    .get_active_base_model(app, Some(terminal_view_id))
+                    .id
+                    .clone()
+            } else {
+                LLMId::from(format!("ollama:{ollama_model}"))
+            }
+        } else {
+            llm_prefs
+                .get_active_base_model(app, Some(terminal_view_id))
+                .id
+                .clone()
+        };
         let coding_model_id = llm_prefs
             .get_active_coding_model(app, Some(terminal_view_id))
             .id
@@ -1683,8 +1698,8 @@ impl BlocklistAIController {
         {
             let Some(conversation) = history_model.conversation(&conversation_id) else {
                 return Err(anyhow!(
-                        "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
-                    ));
+                    "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
+                ));
             };
             let task_id = conversation.get_root_task_id().clone();
             let conversation_data = api::ConversationData {
@@ -1716,8 +1731,8 @@ impl BlocklistAIController {
             (conversation_id, task_id, conversation_data)
         } else {
             return Err(anyhow!(
-                    "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
-                ));
+                "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
+            ));
         };
 
         let inputs = vec![AIAgentInput::TriggerPassiveSuggestion {

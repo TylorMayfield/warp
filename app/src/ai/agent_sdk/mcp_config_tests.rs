@@ -270,6 +270,7 @@ fn serializes_mcp_servers_as_object_not_string() {
 
     let request = SpawnAgentRequest {
         prompt: "hello".to_string(),
+        working_directory: None,
         config: Some(AgentConfigSnapshot {
             mcp_servers: Some(mcp_servers),
             ..Default::default()

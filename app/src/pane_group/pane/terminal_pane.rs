@@ -1371,6 +1371,7 @@ fn handle_terminal_view_event(
                             };
                             let spawn_request = SpawnAgentRequest {
                                 prompt: request.prompt,
+                                working_directory: None,
                                 config: Some(AgentConfigSnapshot {
                                     environment_id,
                                     model_id: (!model_id.is_empty()).then_some(model_id),

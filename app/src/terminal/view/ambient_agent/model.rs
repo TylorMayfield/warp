@@ -29,6 +29,7 @@ use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
 use crate::server::server_api::{AIApiError, CloudAgentCapacityError, ServerApiProvider};
+use crate::terminal::view::TerminalView;
 use crate::terminal::view::ambient_agent::SetupCommandState;
 
 use super::AmbientAgentProgressUIState;
@@ -120,6 +121,13 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
+    fn current_terminal_working_directory(&self, ctx: &mut ModelContext<Self>) -> Option<String> {
+        ctx.window_ids().find_map(|window_id| {
+            ctx.view_with_id::<TerminalView>(window_id, self.terminal_view_id)
+                .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
+        })
+    }
+
     pub fn new(
         terminal_view_id: EntityId,
         has_parent_terminal: bool,
@@ -505,9 +513,11 @@ impl AmbientAgentViewModel {
             harness: harness_override,
             ..Default::default()
         });
+        let working_directory = self.current_terminal_working_directory(ctx);
 
         let request = SpawnAgentRequest {
             prompt,
+            working_directory,
             config,
             title: None,
             team: None,

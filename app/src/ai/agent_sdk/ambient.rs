@@ -473,6 +473,7 @@ impl AmbientAgentRunner {
 
             let request = SpawnAgentRequest {
                 prompt: prompt_string,
+                working_directory: None,
                 config,
                 title: None,
                 team: match (args.scope.team, args.scope.personal) {

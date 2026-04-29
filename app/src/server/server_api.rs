@@ -4,8 +4,8 @@ pub mod block;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_secrets;
-mod ollama;
 pub mod object;
+mod ollama;
 pub(crate) mod presigned_upload;
 pub mod referral;
 pub mod team;
@@ -42,7 +42,7 @@ use warpui::{r#async::BoxFuture, ModelContext};
 use workspace::WorkspaceClient;
 
 use crate::server::telemetry::TelemetryApi;
-use crate::settings::PrivacySettingsSnapshot;
+use crate::settings::{AISettings, AISettingsChangedEvent, PrivacySettingsSnapshot};
 use crate::settings_view;
 
 use crate::ChannelState;
@@ -62,10 +62,10 @@ use warp_core::telemetry::TelemetryEvent;
 use warpui::Entity;
 use warpui::SingletonEntity;
 
+use self::ollama::OllamaAIClient;
 use super::experiments::ServerExperiment;
 use super::experiments::ServerExperiments;
 use super::graphql::GraphQLError;
-use self::ollama::OllamaAIClient;
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -1042,6 +1042,10 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
+        if let Some(stream) = ollama::generate_local_multi_agent_output(request).await? {
+            return Ok(stream);
+        }
+
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -1289,7 +1293,28 @@ impl ServerApiProvider {
         );
         let server_api = Arc::new(server_api);
         let ai_client: Arc<dyn AIClient> = match OllamaAIClient::new(server_api.clone()) {
-            Ok(client) => Arc::new(client),
+            Ok(client) => {
+                let client = Arc::new(client);
+                client.set_active_config(OllamaAIClient::config_from_settings(AISettings::as_ref(
+                    ctx,
+                )));
+
+                let ollama_client = client.clone();
+                ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, event, ctx| {
+                    if matches!(
+                        event,
+                        AISettingsChangedEvent::LocalLLMProvider { .. }
+                            | AISettingsChangedEvent::OllamaModel { .. }
+                            | AISettingsChangedEvent::OllamaBaseUrl { .. }
+                    ) {
+                        ollama_client.set_active_config(OllamaAIClient::config_from_settings(
+                            AISettings::as_ref(ctx),
+                        ));
+                    }
+                });
+
+                client
+            }
             Err(error) => {
                 log::error!(
                     "Failed to initialize configurable AI client; falling back to Warp server: {error:#}"

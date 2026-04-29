@@ -871,6 +871,17 @@ impl AgentDriverRunner {
             let mut config = merged_config;
             // We don't set a worker, since this is a local run.
             config.worker_host = None;
+            // Local-only model ids like `ollama:*` are valid for the in-app driver,
+            // but warp-server validates task metadata against cloud-allowed models.
+            // Keep the local driver selection, but omit local-only ids from the
+            // bookkeeping task creation request.
+            if config
+                .model_id
+                .as_deref()
+                .is_some_and(|model_id| model_id.starts_with("ollama:"))
+            {
+                config.model_id = None;
+            }
             Some(config)
         };
 
