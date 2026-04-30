@@ -1,5 +1,6 @@
 //! Commands to interact with ambient agents on Warp's platform.
 use std::io::Write as _;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,6 +58,14 @@ const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
 
 /// Singleton model that runs async work for ambient agent CLI commands.
 struct AmbientAgentRunner;
+
+fn fallback_working_directory() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|path| path.canonicalize().ok().or(Some(path)))
+        .map(PathBuf::into_os_string)
+        .and_then(|path| path.into_string().ok())
+}
 
 /// Run an ambient agent with the provided arguments.
 pub fn run_ambient_agent(ctx: &mut AppContext, args: RunCloudArgs) -> anyhow::Result<()> {
@@ -473,7 +482,7 @@ impl AmbientAgentRunner {
 
             let request = SpawnAgentRequest {
                 prompt: prompt_string,
-                working_directory: None,
+                working_directory: fallback_working_directory(),
                 config,
                 title: None,
                 team: match (args.scope.team, args.scope.personal) {

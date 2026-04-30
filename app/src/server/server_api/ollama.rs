@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::Path,
     sync::OnceLock,
     sync::{
         Arc,
@@ -11,7 +12,7 @@ use std::{
 use ::settings::Setting;
 use anyhow::{Context, Result as AnyhowResult};
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{Local, Utc};
 use futures::StreamExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,7 @@ use crate::{
     },
     settings::{self, AISettings, LocalLLMProvider},
     terminal::{model::block::SerializedBlock, view::ambient_agent::OLLAMA_COMPLETED_PREFIX},
+    util::git,
 };
 use ai::index::full_source_code_embedding::{
     self, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata, store_client::IntermediateNode,
@@ -59,6 +61,20 @@ use uuid::Uuid;
 use warp_graphql::ai::AgentTaskState;
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warp_multi_agent_api::ConversationData;
+
+mod parsing;
+mod prompts;
+mod tools;
+
+use self::{
+    parsing::{looks_like_tool_attempt, normalize_assistant_message, parse_tool_calls_from_content},
+    prompts::{
+        build_local_agent_system_prompt, build_local_dialogue_system_prompt,
+        build_multi_agent_system_prompt,
+        build_tool_repair_messages,
+    },
+    tools::{agent_tools, execute_tool, is_supported_tool_name},
+};
 
 // ---- Ollama config ----
 
@@ -492,6 +508,233 @@ impl OllamaAgentMessage {
     }
 }
 
+fn message_content<'a>(message: &'a OllamaAgentMessage) -> &'a str {
+    message.content.as_deref().unwrap_or_default()
+}
+
+fn combined_user_text(messages: &[OllamaAgentMessage]) -> String {
+    messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .map(message_content)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase()
+}
+
+fn runtime_context_has_current_time(messages: &[OllamaAgentMessage]) -> bool {
+    messages.iter().any(|message| {
+        message.role == "system" && message_content(message).contains("Current local time:")
+    })
+}
+
+fn is_time_or_date_request(user_text: &str) -> bool {
+    [
+        "what time",
+        "current time",
+        "time is it",
+        "what's the time",
+        "date is it",
+        "current date",
+        "today's date",
+        "today date",
+    ]
+    .iter()
+    .any(|pattern| user_text.contains(pattern))
+}
+
+fn is_git_related_request(user_text: &str) -> bool {
+    [
+        "git",
+        "commit",
+        "push",
+        "stage",
+        "staging",
+        "branch",
+        "diff",
+        "status",
+        "repository",
+        "repo",
+    ]
+    .iter()
+    .any(|pattern| user_text.contains(pattern))
+}
+
+fn contains_shell_command_chaining(command: &str) -> bool {
+    command.contains("&&")
+        || command.contains("||")
+        || command.contains(';')
+        || command.contains('\n')
+}
+
+fn is_git_inspection_command(command: &str) -> bool {
+    let command = command.trim().to_lowercase();
+    command.starts_with("git status")
+        || command.starts_with("git diff")
+        || command.starts_with("git log")
+        || command.starts_with("git show")
+}
+
+fn is_git_mutation_command(command: &str) -> bool {
+    let command = command.trim().to_lowercase();
+    command.starts_with("git add")
+        || command.starts_with("git commit")
+        || command.starts_with("git push")
+        || command.starts_with("git rm")
+        || command.starts_with("git mv")
+        || command.starts_with("git reset")
+        || command.starts_with("git checkout")
+        || command.starts_with("git cherry-pick")
+        || command.starts_with("git rebase")
+        || command.starts_with("git merge")
+}
+
+fn has_prior_git_inspection(messages: &[OllamaAgentMessage]) -> bool {
+    has_prior_matching_command(messages, is_git_inspection_command)
+}
+
+fn has_prior_matching_command(
+    messages: &[OllamaAgentMessage],
+    predicate: impl Fn(&str) -> bool,
+) -> bool {
+    messages.iter().any(|message| {
+        message.tool_calls.iter().any(|call| {
+            call.function.name == "run_command"
+                && call
+                    .function
+                    .arguments
+                    .get("command")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(&predicate)
+        })
+    })
+}
+
+fn validate_tool_call(
+    messages: &[OllamaAgentMessage],
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Option<String> {
+    let user_text = combined_user_text(messages);
+    let wants_stage = user_text.contains("stage");
+    let wants_commit = user_text.contains("commit");
+    let wants_push = user_text.contains("push");
+
+    if runtime_context_has_current_time(messages)
+        && is_time_or_date_request(&user_text)
+        && !user_text.contains("verify")
+        && !user_text.contains("double-check")
+    {
+        return Some(
+            "Policy: Warp runtime context already includes the current local time/date. Do not \
+call any tool. Respond in plain language using the `Current local time:` value from runtime \
+context."
+                .to_string(),
+        );
+    }
+
+    if is_git_related_request(&user_text) && !has_prior_git_inspection(messages) {
+        if tool_name != "run_command" {
+            return Some(
+                "Policy: For git workflows, inspect repository state first. Your next tool call \
+should be `run_command` with `git status --short --branch`."
+                    .to_string(),
+            );
+        }
+
+        let command = arguments.get("command").and_then(|value| value.as_str())?;
+        if contains_shell_command_chaining(command) {
+            return Some(
+                "Policy: Use one shell command per tool call. Do not chain git commands with \
+`&&`, `||`, `;`, or newlines. First call `run_command` with `git status --short --branch`."
+                    .to_string(),
+            );
+        }
+
+        if is_git_mutation_command(command) && !is_git_inspection_command(command) {
+            return Some(
+                "Policy: Inspect repository state first before staging, committing, or pushing. \
+Your next tool call should be `run_command` with `git status --short --branch`."
+                    .to_string(),
+            );
+        }
+
+        if wants_stage && command.trim().to_lowercase().starts_with("git diff --cached") {
+            return Some(
+                "Policy: Stage the intended files first. Your next tool call should be \
+`run_command` with a `git add ...` command for the intended files."
+                    .to_string(),
+            );
+        }
+
+        if wants_commit && command.trim().to_lowercase().starts_with("git commit") {
+            return Some(
+                "Policy: Before committing, stage the intended files and inspect the staged diff \
+summary. If files are not staged yet, your next tool call should be `run_command` with a \
+`git add ...` command."
+                    .to_string(),
+            );
+        }
+
+        if wants_push && command.trim().to_lowercase().starts_with("git push") {
+            return Some(
+                "Policy: Inspect, stage, and commit the changes before pushing. Your next tool \
+call should be `run_command` with `git status --short --branch`."
+                    .to_string(),
+            );
+        }
+    }
+
+    if tool_name == "run_command" {
+        let command = arguments.get("command").and_then(|value| value.as_str())?;
+        let command_lower = command.trim().to_lowercase();
+        if contains_shell_command_chaining(command) {
+            return Some(
+                "Policy: Use one shell command per tool call. Do not combine multiple shell \
+commands with `&&`, `||`, `;`, or newlines."
+                    .to_string(),
+            );
+        }
+
+        let has_prior_git_add =
+            has_prior_matching_command(messages, |cmd| cmd.trim().to_lowercase().starts_with("git add"));
+        let has_prior_staged_diff = has_prior_matching_command(messages, |cmd| {
+            cmd.trim().to_lowercase().starts_with("git diff --cached")
+        });
+        let has_prior_git_commit = has_prior_matching_command(messages, |cmd| {
+            cmd.trim().to_lowercase().starts_with("git commit")
+        });
+
+        if wants_stage && command_lower.starts_with("git diff --cached") && !has_prior_git_add {
+            return Some(
+                "Policy: Stage the intended files first. Your next tool call should be \
+`run_command` with a `git add ...` command for the intended files."
+                    .to_string(),
+            );
+        }
+
+        if wants_commit && command_lower.starts_with("git commit")
+            && (!has_prior_git_add || !has_prior_staged_diff)
+        {
+            return Some(
+                "Policy: Before committing, stage the intended files and inspect the staged diff \
+summary with `git diff --cached --stat`."
+                    .to_string(),
+            );
+        }
+
+        if wants_push && command_lower.starts_with("git push") && !has_prior_git_commit {
+            return Some(
+                "Policy: Create the commit before pushing the branch. Your next tool call should \
+be `run_command` with `git commit -m ...` after the staged diff has been inspected."
+                    .to_string(),
+            );
+        }
+    }
+
+    None
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct OllamaToolCall {
     function: OllamaToolCallFunction,
@@ -520,139 +763,6 @@ struct OllamaOptions {
 #[derive(Deserialize)]
 struct OllamaAgentChatResponse {
     message: OllamaAgentMessage,
-}
-
-fn normalize_ollama_assistant_message(message: OllamaAgentMessage) -> OllamaAgentMessage {
-    if !message.tool_calls.is_empty() {
-        return message;
-    }
-
-    let Some(content) = message.content.as_deref() else {
-        return message;
-    };
-
-    let trimmed = content.trim();
-    let Some(tool_call) = parse_tool_call_from_content(trimmed) else {
-        return message;
-    };
-
-    OllamaAgentMessage {
-        tool_calls: vec![tool_call],
-        content: None,
-        ..message
-    }
-}
-
-fn parse_tool_call_from_content(content: &str) -> Option<OllamaToolCall> {
-    let parsed = parse_tool_call_json(content)
-        .or_else(|| extract_json_object(content).and_then(|json| parse_tool_call_json(&json)))
-        .or_else(|| parse_function_style_tool_call(content))?;
-
-    Some(parsed)
-}
-
-fn parse_function_style_tool_call(content: &str) -> Option<OllamaToolCall> {
-    let open_paren = content.find('(')?;
-    let close_paren = content.rfind(')')?;
-    if close_paren <= open_paren {
-        return None;
-    }
-
-    let name = content[..open_paren].trim();
-    if name.is_empty() {
-        return None;
-    }
-
-    let args_src = content[open_paren + 1..close_paren].trim();
-    let arguments = if args_src.is_empty() {
-        serde_json::Value::Object(serde_json::Map::new())
-    } else {
-        parse_function_style_arguments(args_src)?
-    };
-
-    Some(OllamaToolCall {
-        function: OllamaToolCallFunction {
-            name: name.to_string(),
-            arguments,
-        },
-    })
-}
-
-fn parse_function_style_arguments(args_src: &str) -> Option<serde_json::Value> {
-    let mut args = serde_json::Map::new();
-    let mut current = String::new();
-    let mut parts = Vec::new();
-    let mut in_quotes = false;
-    let mut quote_char = '\0';
-    let mut escape = false;
-
-    for ch in args_src.chars() {
-        if escape {
-            current.push(ch);
-            escape = false;
-            continue;
-        }
-
-        if ch == '\\' && in_quotes {
-            current.push(ch);
-            escape = true;
-            continue;
-        }
-
-        if in_quotes {
-            if ch == quote_char {
-                in_quotes = false;
-            }
-            current.push(ch);
-            continue;
-        }
-
-        match ch {
-            '"' | '\'' => {
-                in_quotes = true;
-                quote_char = ch;
-                current.push(ch);
-            }
-            ',' => {
-                if !current.trim().is_empty() {
-                    parts.push(current.trim().to_string());
-                }
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    if !current.trim().is_empty() {
-        parts.push(current.trim().to_string());
-    }
-
-    for part in parts {
-        let (key, raw_value) = part.split_once('=')?;
-        let key = key.trim();
-        let raw_value = raw_value.trim();
-        if key.is_empty() {
-            return None;
-        }
-
-        let value = if let Some(unquoted) = raw_value
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-            .or_else(|| raw_value.strip_prefix('\'').and_then(|value| value.strip_suffix('\'')))
-        {
-            serde_json::Value::String(unquoted.replace("\\\"", "\"").replace("\\'", "'"))
-        } else if let Ok(boolean) = raw_value.parse::<bool>() {
-            serde_json::Value::Bool(boolean)
-        } else if let Ok(integer) = raw_value.parse::<i64>() {
-            serde_json::Value::Number(integer.into())
-        } else {
-            serde_json::Value::String(raw_value.to_string())
-        };
-
-        args.insert(key.to_string(), value);
-    }
-
-    Some(serde_json::Value::Object(args))
 }
 
 fn try_solve_simple_arithmetic(prompt: &str) -> Option<String> {
@@ -686,45 +796,58 @@ fn try_solve_simple_arithmetic(prompt: &str) -> Option<String> {
     Some(value.to_string())
 }
 
-fn parse_tool_call_json(content: &str) -> Option<OllamaToolCall> {
-    let value: serde_json::Value = serde_json::from_str(content).ok()?;
-    tool_call_from_value(&value)
+fn all_tool_calls_supported(tool_calls: &[OllamaToolCall]) -> bool {
+    tool_calls
+        .iter()
+        .all(|tool_call| is_supported_tool_name(&tool_call.function.name))
 }
 
-fn extract_json_object(content: &str) -> Option<String> {
-    let start = content.find('{')?;
-    let end = content.rfind('}')?;
-    (start < end).then(|| content[start..=end].to_string())
+async fn repair_tool_calls_from_content(
+    http_client: &reqwest::Client,
+    config: &OllamaConfig,
+    raw_content: &str,
+) -> AnyhowResult<Vec<OllamaToolCall>> {
+    let repair_output =
+        chat_with_config(http_client, config, build_tool_repair_messages(raw_content)).await?;
+    Ok(parse_tool_calls_from_content(&repair_output)
+        .into_iter()
+        .filter(|tool_call| is_supported_tool_name(&tool_call.function.name))
+        .collect())
 }
 
-fn tool_call_from_value(value: &serde_json::Value) -> Option<OllamaToolCall> {
-    let object = value.as_object()?;
-
-    if let Some(function) = object.get("function") {
-        let function = function.as_object()?;
-        let name = function.get("name")?.as_str()?.to_string();
-        let arguments = function
-            .get("arguments")
-            .cloned()
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-        return Some(OllamaToolCall {
-            function: OllamaToolCallFunction { name, arguments },
-        });
+async fn maybe_repair_assistant_message(
+    http_client: &reqwest::Client,
+    config: &OllamaConfig,
+    message: OllamaAgentMessage,
+) -> AnyhowResult<OllamaAgentMessage> {
+    let normalized = normalize_assistant_message(message);
+    if !normalized.tool_calls.is_empty() && all_tool_calls_supported(&normalized.tool_calls) {
+        return Ok(normalized);
     }
 
-    let name = object
-        .get("name")
-        .or_else(|| object.get("tool"))
-        .and_then(|value| value.as_str())?
-        .to_string();
-    let arguments = object
-        .get("parameters")
-        .or_else(|| object.get("arguments"))
-        .cloned()
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let raw_content = normalized
+        .content
+        .clone()
+        .filter(|content| looks_like_tool_attempt(content))
+        .or_else(|| {
+            (!normalized.tool_calls.is_empty())
+                .then(|| serde_json::to_string(&normalized.tool_calls).ok())
+                .flatten()
+        });
 
-    Some(OllamaToolCall {
-        function: OllamaToolCallFunction { name, arguments },
+    let Some(raw_content) = raw_content else {
+        return Ok(normalized);
+    };
+
+    let repaired_tool_calls = repair_tool_calls_from_content(http_client, config, &raw_content).await?;
+    if repaired_tool_calls.is_empty() {
+        return Ok(normalized);
+    }
+
+    Ok(OllamaAgentMessage {
+        tool_calls: repaired_tool_calls,
+        content: None,
+        ..normalized
     })
 }
 
@@ -761,6 +884,7 @@ async fn run_ollama_tool_loop(
     mut messages: Vec<OllamaAgentMessage>,
 ) -> AnyhowResult<String> {
     let tools = agent_tools();
+    let mut policy_history = messages.clone();
     let url =
         Url::parse(&format!("{}/api/chat", config.base_url)).context("Invalid Ollama base URL")?;
 
@@ -798,15 +922,35 @@ async fn run_ollama_tool_loop(
             .await
             .context("Failed to parse Ollama response")?;
 
-        let assistant_msg = normalize_ollama_assistant_message(parsed.message.clone());
+        let assistant_msg =
+            maybe_repair_assistant_message(http_client, config, parsed.message).await?;
         if assistant_msg.tool_calls.is_empty() {
             return Ok(assistant_msg.content.unwrap_or_default());
         }
 
         messages.push(assistant_msg.clone());
         for tool_call in &assistant_msg.tool_calls {
-            let result =
-                execute_tool(&tool_call.function.name, &tool_call.function.arguments).await;
+            let result = if let Some(policy_error) = validate_tool_call(
+                &policy_history,
+                &tool_call.function.name,
+                &tool_call.function.arguments,
+            ) {
+                policy_error
+            } else {
+                let result = execute_tool(
+                    &tool_call.function.name,
+                    &tool_call.function.arguments,
+                    None,
+                )
+                .await;
+                policy_history.push(OllamaAgentMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_calls: vec![tool_call.clone()],
+                });
+                policy_history.push(OllamaAgentMessage::tool_result(result.clone()));
+                result
+            };
             messages.push(OllamaAgentMessage::tool_result(result));
         }
     }
@@ -958,15 +1102,13 @@ fn wrap_action_event(action: maa_api::client_action::Action) -> maa_api::Respons
 }
 
 fn build_multi_agent_agent_messages(request: &maa_api::Request) -> Vec<OllamaAgentMessage> {
-    let mut messages = vec![OllamaAgentMessage::system(
-        "You are a helpful AI assistant with access to tools. \
-Use the available tools to inspect local files, run shell commands, and gather context when needed. \
-Do not claim you lack tool access when tools would help. \
-Answer directly when the user asks for simple reasoning or general knowledge that does not require local context or command execution. \
-Only call tools when they are actually needed. \
-When you decide to call a tool, return the tool call itself instead of describing it in prose or wrapping it in markdown. \
-After completing the task, provide a clear summary of what you did and the results.",
-    )];
+    let mut messages = vec![OllamaAgentMessage::system(build_multi_agent_system_prompt())];
+    messages.push(OllamaAgentMessage::system(format_runtime_context(
+        Local::now(),
+        None,
+        None,
+        None,
+    )));
 
     if let Some(task_context) = &request.task_context {
         for task in &task_context.tasks {
@@ -990,6 +1132,133 @@ After completing the task, provide a clear summary of what you did and the resul
 
     append_request_input_messages(&mut messages, request.input.as_ref());
     messages
+}
+
+#[derive(Debug, Clone, Default)]
+struct GitRuntimeContext {
+    repo_root: Option<String>,
+    branch: Option<String>,
+    head: Option<String>,
+    status_summary: Option<String>,
+    staged_diff_stat: Option<String>,
+    unstaged_diff_stat: Option<String>,
+}
+
+async fn collect_git_runtime_context(working_directory: Option<&str>) -> Option<GitRuntimeContext> {
+    let working_directory = working_directory?.trim();
+    if working_directory.is_empty() {
+        return None;
+    }
+
+    let repo_path = Path::new(working_directory);
+    let repo_root = git::run_git_command(repo_path, &["rev-parse", "--show-toplevel"])
+        .await
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty())?;
+
+    let branch = git::detect_current_branch_display(repo_path)
+        .await
+        .ok()
+        .filter(|output| !output.is_empty());
+    let head = git::run_git_command(repo_path, &["rev-parse", "--short", "HEAD"])
+        .await
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty());
+    let status_summary = git::run_git_command(repo_path, &["status", "--short", "--branch"])
+        .await
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty())
+        .map(|output| truncate_owned(output, 4000));
+    let staged_diff_stat = git::run_git_command(repo_path, &["diff", "--cached", "--stat"])
+        .await
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty())
+        .map(|output| truncate_owned(output, 2000));
+    let unstaged_diff_stat = git::run_git_command(repo_path, &["diff", "--stat"])
+        .await
+        .ok()
+        .map(|output| output.trim().to_string())
+        .filter(|output| !output.is_empty())
+        .map(|output| truncate_owned(output, 2000));
+
+    Some(GitRuntimeContext {
+        repo_root: Some(repo_root),
+        branch,
+        head,
+        status_summary,
+        staged_diff_stat,
+        unstaged_diff_stat,
+    })
+}
+
+fn format_runtime_context(
+    current_time: chrono::DateTime<Local>,
+    working_directory: Option<&str>,
+    execution_context: Option<&WarpAiExecutionContext>,
+    git_context: Option<&GitRuntimeContext>,
+) -> String {
+    let mut lines = vec![
+        "Warp runtime context (authoritative, already known facts; do not re-check these facts with tools unless the user explicitly asks you to verify them):".to_string(),
+        format!("Current local time: {}", current_time.to_rfc3339()),
+    ];
+
+    if let Some(working_directory) = working_directory.filter(|cwd| !cwd.trim().is_empty()) {
+        lines.push(format!("Current working directory: {working_directory}"));
+    }
+
+    if let Some(execution_context) = execution_context {
+        if let Some(os_category) = execution_context.os.category.as_deref() {
+            lines.push(format!("Operating system: {os_category}"));
+        }
+
+        if let Some(distribution) = execution_context.os.distribution.as_deref() {
+            lines.push(format!("OS distribution: {distribution}"));
+        }
+
+        if !execution_context.shell_name.trim().is_empty() {
+            lines.push(format!("Shell: {}", execution_context.shell_name));
+        }
+
+        if let Some(shell_version) = execution_context
+            .shell_version
+            .as_deref()
+            .filter(|version| !version.trim().is_empty())
+        {
+            lines.push(format!("Shell version: {shell_version}"));
+        }
+    }
+
+    if let Some(git_context) = git_context {
+        lines.push("Git repository context:".to_string());
+
+        if let Some(repo_root) = git_context.repo_root.as_deref() {
+            lines.push(format!("Git root: {repo_root}"));
+        }
+        if let Some(branch) = git_context.branch.as_deref() {
+            lines.push(format!("Git branch: {branch}"));
+        }
+        if let Some(head) = git_context.head.as_deref() {
+            lines.push(format!("Git HEAD: {head}"));
+        }
+        if let Some(status_summary) = git_context.status_summary.as_deref() {
+            lines.push("Git status summary:".to_string());
+            lines.push(status_summary.to_string());
+        }
+        if let Some(staged_diff_stat) = git_context.staged_diff_stat.as_deref() {
+            lines.push("Staged diff summary:".to_string());
+            lines.push(staged_diff_stat.to_string());
+        }
+        if let Some(unstaged_diff_stat) = git_context.unstaged_diff_stat.as_deref() {
+            lines.push("Unstaged diff summary:".to_string());
+            lines.push(unstaged_diff_stat.to_string());
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn append_request_input_messages(
@@ -1042,221 +1311,6 @@ fn append_request_input_messages(
 
 // ---- Local agent loop ----
 
-fn agent_tools() -> Vec<serde_json::Value> {
-    serde_json::from_str(r#"[
-      {
-        "type": "function",
-        "function": {
-          "name": "run_command",
-          "description": "Execute a shell command and return its stdout and stderr. Use this for running scripts, compiling code, checking output, etc.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "command": {"type": "string", "description": "The shell command to run"},
-              "working_dir": {"type": "string", "description": "Optional working directory (absolute path)"}
-            },
-            "required": ["command"]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "read_file",
-          "description": "Read the full contents of a file at a given path",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "path": {"type": "string", "description": "Absolute or relative path to the file"}
-            },
-            "required": ["path"]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "write_file",
-          "description": "Write or overwrite a file with given content",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "path": {"type": "string", "description": "Absolute or relative path to the file"},
-              "content": {"type": "string", "description": "Content to write into the file"}
-            },
-            "required": ["path", "content"]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "list_files",
-          "description": "List files in a directory, with optional glob pattern",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "path": {"type": "string", "description": "Directory path to list"},
-              "pattern": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '*.rs')"}
-            },
-            "required": ["path"]
-          }
-        }
-      },
-      {
-        "type": "function",
-        "function": {
-          "name": "search_in_files",
-          "description": "Search for a text pattern inside files using grep-like search",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "pattern": {"type": "string", "description": "Text or regex pattern to search for"},
-              "path": {"type": "string", "description": "Directory or file path to search in"},
-              "case_sensitive": {"type": "boolean", "description": "Whether the search is case-sensitive (default true)"}
-            },
-            "required": ["pattern", "path"]
-          }
-        }
-      }
-    ]"#).unwrap_or_default()
-}
-
-async fn execute_tool(name: &str, args: &serde_json::Value) -> String {
-    execute_tool_with_defaults(name, args, None).await
-}
-
-async fn execute_tool_with_defaults(
-    name: &str,
-    args: &serde_json::Value,
-    default_working_directory: Option<&str>,
-) -> String {
-    match name {
-        "run_command" => {
-            let command = match args.get("command").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return "Error: 'command' argument is required".to_string(),
-            };
-            let working_dir = args
-                .get("working_dir")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .or_else(|| default_working_directory.map(str::to_string));
-            run_shell_command(command, working_dir).await
-        }
-
-        "read_file" => {
-            let path = match args.get("path").and_then(|v| v.as_str()) {
-                Some(p) => p.to_string(),
-                None => return "Error: 'path' argument is required".to_string(),
-            };
-            let default_working_directory = default_working_directory.map(str::to_string);
-            match tokio::task::spawn_blocking(move || {
-                let resolved = resolve_tool_path(&path, default_working_directory.as_deref());
-                std::fs::read_to_string(&resolved)
-                    .map(|content| truncate_str(&content, 16000).to_string())
-                    .unwrap_or_else(|err| {
-                        format!("Error reading file '{}': {err}", resolved.display())
-                    })
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(err) => format!("Error: {err}"),
-            }
-        }
-
-        "write_file" => {
-            let path = match args.get("path").and_then(|v| v.as_str()) {
-                Some(p) => p.to_string(),
-                None => return "Error: 'path' argument is required".to_string(),
-            };
-            let content = match args.get("content").and_then(|v| v.as_str()) {
-                Some(c) => c.to_string(),
-                None => return "Error: 'content' argument is required".to_string(),
-            };
-            let default_working_directory = default_working_directory.map(str::to_string);
-            match tokio::task::spawn_blocking(move || {
-                let resolved = resolve_tool_path(&path, default_working_directory.as_deref());
-                if let Some(parent) = resolved.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let len = content.len();
-                std::fs::write(&resolved, &content)
-                    .map(|()| {
-                        format!(
-                            "Successfully wrote {len} bytes to '{}'",
-                            resolved.display()
-                        )
-                    })
-                    .unwrap_or_else(|err| {
-                        format!("Error writing file '{}': {err}", resolved.display())
-                    })
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(err) => format!("Error: {err}"),
-            }
-        }
-
-        "list_files" => {
-            let path = match args.get("path").and_then(|v| v.as_str()) {
-                Some(p) => p.to_string(),
-                None => return "Error: 'path' argument is required".to_string(),
-            };
-            let pattern = args
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("*")
-                .to_string();
-            // Use run_command: let the shell handle the listing cross-platform
-            let cmd = if cfg!(target_os = "windows") {
-                format!("dir /B /S \"{path}\"")
-            } else {
-                format!("find '{path}' -name '{pattern}' 2>/dev/null | head -200")
-            };
-            run_shell_command(cmd, default_working_directory.map(str::to_string)).await
-        }
-
-        "search_in_files" => {
-            let pattern = match args.get("pattern").and_then(|v| v.as_str()) {
-                Some(p) => p.to_string(),
-                None => return "Error: 'pattern' argument is required".to_string(),
-            };
-            let path = match args.get("path").and_then(|v| v.as_str()) {
-                Some(p) => p.to_string(),
-                None => return "Error: 'path' argument is required".to_string(),
-            };
-            let case_insensitive = !args
-                .get("case_sensitive")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let cmd = if cfg!(target_os = "windows") {
-                let flag = if case_insensitive { "/I" } else { "" };
-                format!("findstr /R/S {flag} \"{pattern}\" \"{path}\"")
-            } else {
-                let flag = if case_insensitive { "-i" } else { "" };
-                format!("grep -rn {flag} '{pattern}' '{path}' 2>/dev/null | head -100")
-            };
-            run_shell_command(cmd, default_working_directory.map(str::to_string)).await
-        }
-
-        other => format!("Error: unknown tool '{other}'"),
-    }
-}
-
-fn resolve_tool_path(path: &str, default_working_directory: Option<&str>) -> std::path::PathBuf {
-    let candidate = std::path::PathBuf::from(path);
-    if candidate.is_absolute() {
-        candidate
-    } else if let Some(working_directory) = default_working_directory {
-        std::path::Path::new(working_directory).join(candidate)
-    } else {
-        candidate
-    }
-}
-
 async fn run_shell_command(command: String, working_dir: Option<String>) -> String {
     match tokio::task::spawn_blocking(move || {
         let mut cmd = if cfg!(target_os = "windows") {
@@ -1307,6 +1361,10 @@ fn truncate_str<'a>(s: &'a str, max_bytes: usize) -> &'a str {
     &s[..boundary]
 }
 
+fn truncate_owned(s: String, max_bytes: usize) -> String {
+    truncate_str(&s, max_bytes).to_string()
+}
+
 async fn run_ollama_agent_loop(
     config: OllamaConfig,
     http_client: reqwest::Client,
@@ -1329,29 +1387,21 @@ async fn run_ollama_agent_loop(
     let tools = agent_tools();
     let base_url = config.base_url.clone();
     let model = config.model.clone();
-
-    let cwd_context = working_directory
-        .as_deref()
-        .map(|cwd| format!("Current working directory: {cwd}. "))
-        .unwrap_or_default();
-    let system_prompt = format!(
-        "\
-You are a helpful AI assistant with access to tools. \
-{cwd_context}\
-Use the available tools to complete the user's task when local context, file inspection, or command execution is required. \
-Assume file paths and shell commands should use the current working directory unless the user specifies otherwise. \
-Answer directly when the task can be completed from reasoning alone, such as simple math or explanation requests. \
-Only call tools when they are actually needed. \
-Do not claim you lack filesystem or terminal access. \
-When you decide to call a tool, return the tool call itself instead of describing it in prose or wrapping it in markdown. \
-After completing the task, provide a clear summary of what you did and the results. \
-If you encounter errors, explain what went wrong and what you tried."
+    let system_prompt = build_local_agent_system_prompt(working_directory.as_deref());
+    let git_context = collect_git_runtime_context(working_directory.as_deref()).await;
+    let runtime_context = format_runtime_context(
+        Local::now(),
+        working_directory.as_deref(),
+        None,
+        git_context.as_ref(),
     );
 
     let mut messages: Vec<OllamaAgentMessage> = vec![
         OllamaAgentMessage::system(system_prompt),
+        OllamaAgentMessage::system(runtime_context),
         OllamaAgentMessage::user(&prompt),
     ];
+    let mut policy_history = messages.clone();
 
     let url = match Url::parse(&format!("{base_url}/api/chat")) {
         Ok(u) => u,
@@ -1413,21 +1463,47 @@ If you encounter errors, explain what went wrong and what you tried."
             }
         };
 
-        let parsed: OllamaAgentChatResponse = match response.json().await {
-            Ok(p) => p,
+        let parsed: OllamaAgentChatResponse = match response.error_for_status() {
+            Ok(response) => match response.json().await {
+                Ok(p) => p,
+                Err(err) => {
+                    update_local_run_status(
+                        &local_runs,
+                        &task_id,
+                        LocalAgentStatus::Failed {
+                            error: format!("Failed to parse Ollama response: {err}"),
+                        },
+                    );
+                    return;
+                }
+            },
             Err(err) => {
                 update_local_run_status(
                     &local_runs,
                     &task_id,
                     LocalAgentStatus::Failed {
-                        error: format!("Failed to parse Ollama response: {err}"),
+                        error: format!("Ollama returned an error response: {err}"),
                     },
                 );
                 return;
             }
         };
 
-        let assistant_msg = normalize_ollama_assistant_message(parsed.message.clone());
+        let assistant_msg = match maybe_repair_assistant_message(&http_client, &config, parsed.message)
+            .await
+        {
+            Ok(p) => p,
+            Err(err) => {
+                update_local_run_status(
+                    &local_runs,
+                    &task_id,
+                    LocalAgentStatus::Failed {
+                        error: format!("Failed to normalize Ollama tool response: {err}"),
+                    },
+                );
+                return;
+            }
+        };
 
         if assistant_msg.tool_calls.is_empty() {
             // No tool calls — this is the final answer
@@ -1498,8 +1574,20 @@ If you encounter errors, explain what went wrong and what you tried."
                 },
             );
 
-            let result =
-                execute_tool_with_defaults(fn_name, fn_args, working_directory.as_deref()).await;
+            let result = if let Some(policy_error) =
+                validate_tool_call(&policy_history, fn_name, fn_args)
+            {
+                policy_error
+            } else {
+                let result = execute_tool(fn_name, fn_args, working_directory.as_deref()).await;
+                policy_history.push(OllamaAgentMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_calls: vec![tool_call.clone()],
+                });
+                policy_history.push(OllamaAgentMessage::tool_result(result.clone()));
+                result
+            };
             messages.push(OllamaAgentMessage::tool_result(result));
         }
     }
@@ -1577,8 +1665,17 @@ impl AIClient for OllamaAIClient {
         };
         let mut messages = vec![OllamaChatMessage {
             role: "system",
-            content: "You are Warp AI running locally through Ollama. Provide concise, helpful answers for terminal and developer questions. Prefer directly actionable guidance.".to_string(),
+            content: build_local_dialogue_system_prompt(),
         }];
+        messages.push(OllamaChatMessage {
+            role: "system",
+            content: format_runtime_context(
+                Local::now(),
+                None,
+                _ai_execution_context.as_ref(),
+                None,
+            ),
+        });
 
         for part in transcript {
             messages.push(OllamaChatMessage {
@@ -1984,5 +2081,59 @@ impl AIClient for OllamaAIClient {
         request: GenerateCodeReviewContentRequest,
     ) -> AnyhowResult<GenerateCodeReviewContentResponse> {
         self.server_api.generate_code_review_content(request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_runtime_context;
+    use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsContext};
+    use chrono::{FixedOffset, TimeZone};
+
+    #[test]
+    fn format_runtime_context_includes_known_runtime_facts() {
+        let current_time = FixedOffset::west_opt(4 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(2026, 4, 30, 8, 37, 6)
+            .single()
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        let execution_context = WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("windows".to_string()),
+                distribution: Some("Windows 11".to_string()),
+            },
+            shell_name: "powershell".to_string(),
+            shell_version: Some("7.5".to_string()),
+        };
+
+        let formatted = format_runtime_context(
+            current_time,
+            Some("C:\\Repos\\warp"),
+            Some(&execution_context),
+            Some(&GitRuntimeContext {
+                repo_root: Some("C:\\Repos\\warp".to_string()),
+                branch: Some("codex/git-awareness".to_string()),
+                head: Some("abc1234".to_string()),
+                status_summary: Some("## codex/git-awareness\n M app/src/server/server_api/ollama.rs".to_string()),
+                staged_diff_stat: Some(" app/src/server/server_api/ollama.rs | 42 ++++++++++++++++++++++".to_string()),
+                unstaged_diff_stat: Some(" app/src/server/server_api/ollama/prompts.rs | 6 +++".to_string()),
+            }),
+        );
+
+        assert!(formatted.contains("Warp runtime context (authoritative, already known facts; do not re-check these facts with tools unless the user explicitly asks you to verify them):"));
+        assert!(formatted.contains("Current local time: 2026-04-30T"));
+        assert!(formatted.contains("Current working directory: C:\\Repos\\warp"));
+        assert!(formatted.contains("Operating system: windows"));
+        assert!(formatted.contains("OS distribution: Windows 11"));
+        assert!(formatted.contains("Shell: powershell"));
+        assert!(formatted.contains("Shell version: 7.5"));
+        assert!(formatted.contains("Git repository context:"));
+        assert!(formatted.contains("Git root: C:\\Repos\\warp"));
+        assert!(formatted.contains("Git branch: codex/git-awareness"));
+        assert!(formatted.contains("Git HEAD: abc1234"));
+        assert!(formatted.contains("Git status summary:"));
+        assert!(formatted.contains("Staged diff summary:"));
+        assert!(formatted.contains("Unstaged diff summary:"));
     }
 }

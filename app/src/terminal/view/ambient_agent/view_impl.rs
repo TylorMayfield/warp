@@ -29,6 +29,7 @@ use warpui::{AppContext, Element, EntityId, SingletonEntity, ViewContext};
 use super::loading_screen::{
     render_cloud_mode_cancelled_screen, render_cloud_mode_error_screen,
     render_cloud_mode_github_auth_required_screen, render_cloud_mode_loading_screen,
+    render_ollama_completed_screen, OLLAMA_COMPLETED_PREFIX,
 };
 use super::{
     is_cloud_agent_pre_first_exchange, AmbientAgentEntryBlock, AmbientAgentViewModelEvent,
@@ -738,14 +739,23 @@ impl TerminalView {
                 app,
             )
         } else if let Some(error_message) = ambient_agent_model.error_message() {
-            // Show error screen
-            render_cloud_mode_error_screen(
-                error_message,
-                appearance,
-                &ui_state.error_selection_handle,
-                &ui_state.error_selected_text,
-                app,
-            )
+            if let Some(output) = error_message.strip_prefix(OLLAMA_COMPLETED_PREFIX) {
+                render_ollama_completed_screen(
+                    output,
+                    appearance,
+                    &ui_state.error_selection_handle,
+                    &ui_state.error_selected_text,
+                    app,
+                )
+            } else {
+                render_cloud_mode_error_screen(
+                    error_message,
+                    appearance,
+                    &ui_state.error_selection_handle,
+                    &ui_state.error_selected_text,
+                    app,
+                )
+            }
         } else {
             // Show loading screen - determine the message based on progress state
             let message = if progress.harness_started_at.is_some() {

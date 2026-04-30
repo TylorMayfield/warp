@@ -18,7 +18,10 @@ pub use harness_selector::{HarnessSelector, HarnessSelectorAction, HarnessSelect
 pub use host_selector::{
     Host, HostSelector, HostSelectorAction, HostSelectorEvent, NakedHeaderButtonTheme,
 };
-pub use loading_screen::{render_cloud_mode_error_screen, render_cloud_mode_loading_screen};
+pub use loading_screen::{
+    render_cloud_mode_error_screen, render_cloud_mode_loading_screen,
+    render_ollama_completed_screen, OLLAMA_COMPLETED_PREFIX,
+};
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
 pub use model_selector::{ModelSelector, ModelSelectorAction, ModelSelectorEvent};
 pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};

@@ -54,8 +54,8 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Expanded,
-    HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable, Text,
+    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Expanded, HyperlinkLens,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::id;
@@ -1522,7 +1522,8 @@ impl AISettingsPageView {
 
     fn is_ollama_input_enabled(ctx: &mut ViewContext<Self>) -> bool {
         let settings = AISettings::as_ref(ctx);
-        settings.is_any_ai_enabled(ctx) && *settings.local_llm_provider.value() == LocalLLMProvider::Ollama
+        settings.is_any_ai_enabled(ctx)
+            && *settings.local_llm_provider.value() == LocalLLMProvider::Ollama
     }
 
     fn update_ollama_settings_enablement(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4098,9 +4099,12 @@ impl AgentsWidget {
         .with_margin_bottom(8.0)
         .finish();
 
-        let provider_setting = Container::new(
-            self.render_local_llm_provider_setting(view, ai_settings, appearance, app),
-        )
+        let provider_setting = Container::new(self.render_local_llm_provider_setting(
+            view,
+            ai_settings,
+            appearance,
+            app,
+        ))
         .with_margin_bottom(8.0)
         .finish();
 
@@ -4108,14 +4112,22 @@ impl AgentsWidget {
 
         if *ai_settings.local_llm_provider.value() == LocalLLMProvider::Ollama {
             children.push(
-                Container::new(self.render_ollama_model_setting(view, ai_settings, appearance, app))
-                    .with_margin_bottom(8.0)
-                    .finish(),
+                Container::new(self.render_ollama_model_setting(
+                    view,
+                    ai_settings,
+                    appearance,
+                    app,
+                ))
+                .with_margin_bottom(8.0)
+                .finish(),
             );
             children.push(
-                Container::new(
-                    self.render_ollama_base_url_setting(view, ai_settings, appearance, app),
-                )
+                Container::new(self.render_ollama_base_url_setting(
+                    view,
+                    ai_settings,
+                    appearance,
+                    app,
+                ))
                 .with_margin_bottom(8.0)
                 .finish(),
             );
@@ -4554,7 +4566,8 @@ impl AgentsWidget {
                 &mut view.local_only_icon_tooltip_states.borrow_mut(),
                 app,
             ),
-            (!ai_settings.is_any_ai_enabled(app)).then(|| appearance.theme().disabled_ui_text_color()),
+            (!ai_settings.is_any_ai_enabled(app))
+                .then(|| appearance.theme().disabled_ui_text_color()),
             view.ollama_model_editor.clone(),
         )
     }
@@ -4576,7 +4589,8 @@ impl AgentsWidget {
                 &mut view.local_only_icon_tooltip_states.borrow_mut(),
                 app,
             ),
-            (!ai_settings.is_any_ai_enabled(app)).then(|| appearance.theme().disabled_ui_text_color()),
+            (!ai_settings.is_any_ai_enabled(app))
+                .then(|| appearance.theme().disabled_ui_text_color()),
             view.ollama_base_url_editor.clone(),
         )
     }
@@ -4901,7 +4915,8 @@ impl SettingsWidget for LocalLLMWidget {
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let color_override = (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color());
+        let color_override =
+            (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color());
 
         let mut column = Flex::column()
             .with_child(render_separator(appearance))
@@ -4963,7 +4978,11 @@ impl SettingsWidget for LocalLLMWidget {
                 .with_child(input)
                 .finish();
 
-            column.add_child(Container::new(base_url_setting).with_margin_bottom(8.).finish());
+            column.add_child(
+                Container::new(base_url_setting)
+                    .with_margin_bottom(8.)
+                    .finish(),
+            );
         }
 
         column.finish()

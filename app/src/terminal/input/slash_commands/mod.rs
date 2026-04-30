@@ -95,6 +95,22 @@ impl SlashCommandTrigger {
 }
 
 impl Input {
+    fn slash_command_argument_from_buffer(
+        &self,
+        _command_name: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<String> {
+        let buffer = self.buffer_text(ctx);
+        let trimmed = buffer.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        let (_, remainder) = trimmed.split_once(char::is_whitespace)?;
+        let trimmed_remainder = remainder.trim();
+        (!trimmed_remainder.is_empty()).then_some(trimmed_remainder.to_owned())
+    }
+
     pub(super) fn select_slash_command(
         &mut self,
         command: &StaticCommand,
@@ -112,11 +128,11 @@ impl Input {
         {
             // TODO (zachbai): this is a hack for Oz launch. Caller
             // should probably be invoking `execute_slash_command` in this case.
-            let argument = if !self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
+            let argument = if self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
+                self.slash_command_argument_from_buffer(command.name, ctx)
+            } else {
                 let trimmed = self.buffer_text(ctx).trim().to_owned();
                 (!trimmed.is_empty()).then_some(trimmed)
-            } else {
-                None
             };
             self.execute_slash_command(
                 command,
@@ -977,5 +993,75 @@ impl Input {
             | SlashCommandEntryState::Composing { .. }
             | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::search::slash_command_menu::static_commands::commands;
+    use crate::terminal::input::tests::{add_window_with_bootstrapped_terminal, initialize_app};
+    use warpui::App;
+
+    #[test]
+    fn extracts_agent_slash_command_argument_from_buffer() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+
+            let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+            let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+            input.update(&mut app, |input, ctx| {
+                input.user_replace_editor_text(
+                    "/agent Can you please stage commit and push our changes",
+                    ctx,
+                );
+
+                assert_eq!(
+                    input.slash_command_argument_from_buffer(commands::AGENT.name, ctx),
+                    Some("Can you please stage commit and push our changes".to_string())
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn extracts_argument_when_agent_command_is_only_partially_typed() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+
+            let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+            let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+            input.update(&mut app, |input, ctx| {
+                input.user_replace_editor_text(
+                    "/ag Can you please stage commit and push our changes",
+                    ctx,
+                );
+
+                assert_eq!(
+                    input.slash_command_argument_from_buffer(commands::AGENT.name, ctx),
+                    Some("Can you please stage commit and push our changes".to_string())
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn returns_none_when_agent_slash_command_has_no_argument() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+
+            let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+            let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+            input.update(&mut app, |input, ctx| {
+                input.user_replace_editor_text("/agent", ctx);
+
+                assert_eq!(
+                    input.slash_command_argument_from_buffer(commands::AGENT.name, ctx),
+                    None
+                );
+            });
+        });
     }
 }

@@ -1,0 +1,623 @@
+{
+  "scenarios": [
+    {
+      "name": "current_time_from_runtime_context",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "What time is it right now on this machine?",
+      "runtime_context": {
+        "current_time": "2026-04-30T08:37:06-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        }
+      },
+      "expected_tool_calls": [],
+      "fixtures": [],
+      "max_policy_violations": 1,
+      "final_answer_matches": "2026|8:37|08:37|April 30, 2026|Thu 04/30/2026"
+    },
+    {
+      "name": "git_stage_commit_push_explicit_steps",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "In separate steps, inspect git status, stage app/src/server/server_api/ollama.rs app/src/server/server_api/ollama/prompts.rs and app/src/server/server_api/ollama/tools.rs, inspect the staged diff summary, create a clear commit, and then push the current branch.",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:20:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git commit -m "
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git push(?: .*)?"
+        }
+      ],
+      "allowed_extra_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git commit -m ",
+          "result": "Exit code: 0\nSTDOUT:\n[codex/ollama-runtime-context 1234abcd] Improve local Ollama runtime and git context handling\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git push(?: .*)?",
+          "result": "Exit code: 0\nSTDOUT:\nTo github.com:warp/warp.git\n   abc1234..1234abcd  codex/ollama-runtime-context -> codex/ollama-runtime-context"
+        }
+      ],
+      "max_policy_violations": 2,
+      "final_answer_matches": "status|staged|commit|push"
+    },
+    {
+      "name": "git_stage_commit_push",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Stage the Ollama prompt and runtime-context changes, create a clear git commit message describing them, and push the current branch.",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:15:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git commit -m "
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git push(?: .*)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git commit -m ",
+          "result": "Exit code: 0\nSTDOUT:\n[codex/ollama-runtime-context 1234abcd] Improve local Ollama runtime and git context handling\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git push(?: .*)?",
+          "result": "Exit code: 0\nSTDOUT:\nTo github.com:warp/warp.git\n   abc1234..1234abcd  codex/ollama-runtime-context -> codex/ollama-runtime-context"
+        }
+      ],
+      "final_answer_matches": "staged|commit|pushed|push"
+    },
+    {
+      "name": "git_stage_commit_push_exact_user_phrase",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Can you please stage commit and push our changes",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:19:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?|git diff --shortstat"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git commit -m "
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git push(?: .*)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --shortstat",
+          "result": "Exit code: 0\nSTDOUT:\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git commit -m ",
+          "result": "Exit code: 0\nSTDOUT:\n[codex/ollama-runtime-context 1234abcd] Improve local Ollama runtime and git context handling\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git push(?: .*)?",
+          "result": "Exit code: 0\nSTDOUT:\nTo github.com:warp/warp.git\n   abc1234..1234abcd  codex/ollama-runtime-context -> codex/ollama-runtime-context"
+        }
+      ],
+      "max_policy_violations": 1,
+      "final_answer_matches": "commit|pushed|push|changes"
+    },
+    {
+      "name": "git_ship_changes_natural",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Can you take these Ollama-related changes, make a good commit for them, and get the branch pushed up?",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:18:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git commit -m "
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git push(?: .*)?"
+        }
+      ],
+      "allowed_extra_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git remote -v"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git commit -m ",
+          "result": "Exit code: 0\nSTDOUT:\n[codex/ollama-runtime-context 1234abcd] Improve local Ollama runtime and git context handling\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git push(?: .*)?",
+          "result": "Exit code: 0\nSTDOUT:\nTo github.com:warp/warp.git\n   abc1234..1234abcd  codex/ollama-runtime-context -> codex/ollama-runtime-context"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git remote -v",
+          "result": "Exit code: 0\nSTDOUT:\norigin\tgit@github.com:warp/warp.git (fetch)\norigin\tgit@github.com:warp/warp.git (push)"
+        }
+      ],
+      "minimum_tool_calls": 5,
+      "maximum_tool_calls": 6,
+      "max_policy_violations": 1,
+      "final_answer_matches": "commit|pushed|push|branch"
+    },
+    {
+      "name": "git_commit_and_push_colloquial",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Please wrap up the current Ollama work: check what changed, commit it with a sensible message, and push it.",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:22:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git commit -m "
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git push(?: .*)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs.*tools\\.rs|git add .*prompts\\.rs.*tools\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git commit -m ",
+          "result": "Exit code: 0\nSTDOUT:\n[codex/ollama-runtime-context 1234abcd] Improve local Ollama runtime and git context handling\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git push(?: .*)?",
+          "result": "Exit code: 0\nSTDOUT:\nTo github.com:warp/warp.git\n   abc1234..1234abcd  codex/ollama-runtime-context -> codex/ollama-runtime-context"
+        }
+      ],
+      "max_policy_violations": 1,
+      "final_answer_matches": "commit|pushed|push|wrapped up"
+    },
+    {
+      "name": "git_inspect_then_summarize",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Please inspect the current git changes and tell me what this branch is changing before we commit anything.",
+      "runtime_context": {
+        "current_time": "2026-04-30T09:30:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?|git diff(?: --stat)?"
+        }
+      ],
+      "allowed_extra_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff(?: -U0)?(?: --stat)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --stat",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff$",
+          "result": "Exit code: 0\nSTDOUT:\ndiff --git a/app/src/server/server_api/ollama.rs b/app/src/server/server_api/ollama.rs\nindex 1111111..2222222 100644\n--- a/app/src/server/server_api/ollama.rs\n+++ b/app/src/server/server_api/ollama.rs\n@@ -1,6 +1,16 @@\n+Added runtime context formatting and git workflow policy enforcement.\ndiff --git a/app/src/server/server_api/ollama/prompts.rs b/app/src/server/server_api/ollama/prompts.rs\n@@ -1,4 +1,10 @@\n+Strengthened local Ollama prompts for runtime context and git sequencing.\ndiff --git a/app/src/server/server_api/ollama/tools.rs b/app/src/server/server_api/ollama/tools.rs\n@@ -1,3 +1,4 @@\n+Expanded run_command guidance for git operations."
+        }
+      ],
+      "minimum_tool_calls": 1,
+      "maximum_tool_calls": 2,
+      "final_answer_matches": "ollama|runtime context|prompt|git"
+    },
+    {
+      "name": "git_propose_commit_message_only",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Look at the current branch changes and suggest a concise commit message, but do not stage, commit, or push anything.",
+      "runtime_context": {
+        "current_time": "2026-04-30T10:00:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs",
+          "unstaged_diff_stat": " app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      },
+      "expected_tool_calls": [],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n app/src/server/server_api/ollama/tools.rs   |  2 +\n 3 files changed, 102 insertions(+)"
+        }
+      ],
+      "minimum_tool_calls": 0,
+      "maximum_tool_calls": 1,
+      "allowed_extra_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?|git diff(?: --stat)?"
+        }
+      ],
+      "final_answer_matches": "commit message|ollama|runtime context|prompt"
+    },
+    {
+      "name": "git_status_then_stage_selected_files",
+      "working_directory": "C:\\Repos\\warp",
+      "prompt": "Check the repo status and stage only app/src/server/server_api/ollama.rs and app/src/server/server_api/ollama/prompts.rs. Do not commit or push.",
+      "runtime_context": {
+        "current_time": "2026-04-30T10:10:00-04:00",
+        "execution_context": {
+          "os": {
+            "category": "windows",
+            "distribution": "Windows 11"
+          },
+          "shell_name": "powershell",
+          "shell_version": "7.5"
+        },
+        "git": {
+          "repo_root": "C:\\Repos\\warp",
+          "branch": "codex/ollama-runtime-context",
+          "head": "abc1234",
+          "status_summary": "## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        }
+      },
+      "expected_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs|git add .*prompts\\.rs.*ollama\\.rs"
+        }
+      ],
+      "allowed_extra_tool_calls": [
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git diff --cached(?: --stat)?"
+        },
+        {
+          "tool": "run_command",
+          "argument": "command",
+          "matches": "git status(?: --short(?: --branch)?)?"
+        }
+      ],
+      "fixtures": [
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\n M app/src/server/server_api/ollama.rs\n M app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git add .*ollama\\.rs.*prompts\\.rs|git add .*prompts\\.rs.*ollama\\.rs",
+          "result": "Exit code: 0"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git diff --cached(?: --stat)?",
+          "result": "Exit code: 0\nSTDOUT:\n app/src/server/server_api/ollama.rs         | 92 ++++++++++++++++++++++++++++++++++\n app/src/server/server_api/ollama/prompts.rs |  8 +++\n 2 files changed, 100 insertions(+)"
+        },
+        {
+          "tool": "run_command",
+          "matches": "git status(?: --short(?: --branch)?)?",
+          "result": "Exit code: 0\nSTDOUT:\n## codex/ollama-runtime-context\nM  app/src/server/server_api/ollama.rs\nM  app/src/server/server_api/ollama/prompts.rs\n M app/src/server/server_api/ollama/tools.rs"
+        }
+      ],
+      "minimum_tool_calls": 2,
+      "maximum_tool_calls": 3,
+      "final_answer_matches": "staged|status|ollama\\.rs|prompts\\.rs"
+    }
+  ]
+}

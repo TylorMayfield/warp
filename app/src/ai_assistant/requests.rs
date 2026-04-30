@@ -113,10 +113,7 @@ impl Requests {
 
 /// Public interface.
 impl Requests {
-    pub fn new(
-        ai_client: Arc<dyn AIClient>,
-        ctx: &mut ModelContext<Self>,
-    ) -> Self {
+    pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         // Check if the user has cached request limit info from before.
         // If not, let's just make an assumption about the server's default request limit
         // and fetch the true request limit later.

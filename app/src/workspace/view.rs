@@ -1492,7 +1492,8 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
         ai_client: Arc<dyn AIClient>,
     ) -> ViewHandle<AIAssistantPanelView> {
-        let ai_assistant_panel = ctx.add_typed_action_view(|ctx| AIAssistantPanelView::new(ai_client, ctx));
+        let ai_assistant_panel =
+            ctx.add_typed_action_view(|ctx| AIAssistantPanelView::new(ai_client, ctx));
 
         ctx.subscribe_to_view(&ai_assistant_panel, |me, _, event, ctx| {
             me.handle_ai_assistant_panel_event(event, ctx);

@@ -1,13 +1,13 @@
 use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
 use crate::editor::EditorView;
 use crate::settings::{AISettings, LocalLLMProvider};
-use settings::Setting;
 use crate::ui_components::icons::Icon;
 use crate::view_components::FilterableDropdown;
 use crate::view_components::{Dropdown, SubmittableTextInput};
 use crate::Appearance;
 use crate::TemplatableMCPServerManager;
 use pathfinder_geometry::vector::vec2f;
+use settings::Setting;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::elements::Hoverable;

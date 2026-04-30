@@ -11,7 +11,6 @@ use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::report_if_error;
 use crate::settings::{AISettings, AISettingsChangedEvent, AgentModeCommandExecutionPredicate};
-use settings::Setting;
 use crate::ui_components::icons::Icon;
 use crate::view_components::{
     action_button::{ActionButton, DangerSecondaryTheme},
@@ -28,6 +27,7 @@ use crate::{
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use itertools::Itertools;
 use regex::Regex;
+use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -629,19 +629,17 @@ impl ExecutionProfileEditorView {
             }
         });
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
-            match event {
-                AISettingsChangedEvent::OllamaModel { .. } => {
-                    let value = AISettings::as_ref(ctx).ollama_model.value().clone();
-                    me.ollama_model_editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text(&value, ctx);
-                    });
-                }
-                AISettingsChangedEvent::LocalLLMProvider { .. } => {
-                    ctx.notify();
-                }
-                _ => {}
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| match event {
+            AISettingsChangedEvent::OllamaModel { .. } => {
+                let value = AISettings::as_ref(ctx).ollama_model.value().clone();
+                me.ollama_model_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text(&value, ctx);
+                });
             }
+            AISettingsChangedEvent::LocalLLMProvider { .. } => {
+                ctx.notify();
+            }
+            _ => {}
         });
 
         ctx.subscribe_to_view(&view.command_allowlist_editor, |view, _, event, ctx| {

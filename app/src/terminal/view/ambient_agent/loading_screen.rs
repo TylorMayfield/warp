@@ -211,6 +211,90 @@ fn render_tier_limits_footer(
     )
 }
 
+/// Prefix written by the Ollama agent loop when the run succeeds.
+/// Used by the render layer to detect success vs. real error.
+pub const OLLAMA_COMPLETED_PREFIX: &str = "Ollama agent completed.\n\n";
+
+/// Renders the Ollama local-agent completed screen (success styling).
+pub fn render_ollama_completed_screen(
+    output: &str,
+    appearance: &Appearance,
+    selection_handle: &SelectionHandle,
+    selected_text: &std::rc::Rc<parking_lot::RwLock<Option<String>>>,
+    _app: &AppContext,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let success_color = blended_colors::accent(theme);
+
+    let check_icon = ConstrainedBox::new(
+        Icon::CheckCircleBroken
+            .to_warpui_icon(success_color)
+            .finish(),
+    )
+    .with_width(ERROR_ICON_SIZE)
+    .with_height(ERROR_ICON_SIZE)
+    .finish();
+
+    let title_text = Text::new(
+        "Ollama Agent Completed",
+        appearance.ui_font_family(),
+        appearance.monospace_font_size() + 2.,
+    )
+    .with_style(Properties::default().weight(Weight::Bold))
+    .with_color(success_color.into())
+    .finish();
+
+    let output_text = Text::new(
+        output.to_string(),
+        appearance.ui_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_main(theme, theme.surface_1()))
+    .with_selectable(true)
+    .soft_wrap(true)
+    .finish();
+
+    let selected_text = selected_text.clone();
+    let selectable_output = SelectableArea::new(
+        selection_handle.clone(),
+        move |selection_args, _, _| {
+            *selected_text.write() = selection_args.selection.filter(|s| !s.is_empty());
+        },
+        output_text,
+    )
+    .finish();
+
+    let content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(12.)
+        .with_child(check_icon)
+        .with_child(title_text)
+        .with_child(selectable_output)
+        .finish();
+
+    let background: warpui::elements::Fill = theme.surface_2().into();
+    let border_color = blended_colors::neutral_4(theme);
+
+    let success_container = Container::new(content)
+        .with_background(background)
+        .with_border(Border::all(1.).with_border_color(border_color))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_horizontal_padding(24.)
+        .with_vertical_padding(16.)
+        .finish();
+
+    let constrained = ConstrainedBox::new(success_container)
+        .with_max_width(500.)
+        .finish();
+
+    Flex::column()
+        .with_main_axis_alignment(MainAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(constrained)
+        .finish()
+}
+
 /// Renders the cloud mode error screen.
 pub fn render_cloud_mode_error_screen(
     error_message: &str,

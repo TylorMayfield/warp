@@ -180,10 +180,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 impl AIAssistantPanelView {
-    pub fn new(
-        ai_client: Arc<dyn AIClient>,
-        ctx: &mut ViewContext<Self>,
-    ) -> Self {
+    pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ViewContext<Self>) -> Self {
         let editor = {
             ctx.add_typed_action_view(|ctx| {
                 let appearance = Appearance::as_ref(ctx);
@@ -210,8 +207,7 @@ impl AIAssistantPanelView {
         let active_session_model = ActiveSession::handle(ctx);
         ctx.observe(&active_session_model, Self::on_active_session_change);
 
-        let requests_model =
-            ctx.add_model(|ctx| Requests::new(ai_client.clone(), ctx));
+        let requests_model = ctx.add_model(|ctx| Requests::new(ai_client.clone(), ctx));
         ctx.subscribe_to_model(&requests_model, move |me, _, event, ctx| {
             me.handle_requests_model_event(event, ctx);
         });

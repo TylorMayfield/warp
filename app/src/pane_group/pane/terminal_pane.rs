@@ -1369,9 +1369,11 @@ fn handle_terminal_view_event(
                                     }
                                 }
                             };
+                            let working_directory =
+                                new_terminal_view.as_ref(ctx).pwd_if_local(ctx);
                             let spawn_request = SpawnAgentRequest {
                                 prompt: request.prompt,
-                                working_directory: None,
+                                working_directory,
                                 config: Some(AgentConfigSnapshot {
                                     environment_id,
                                     model_id: (!model_id.is_empty()).then_some(model_id),
